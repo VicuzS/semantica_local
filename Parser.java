@@ -29,16 +29,20 @@ public class Parser {
 
     static class IdentificadorInfo {
         String nombre;
-        String tipo;           // enterito, realito, vacio, nombre de clase, etc.
+        String tipo;
         Object valor;
-        String modificador;    // variable, constantito, parámetro, metodillo, favor, clasesita, objeto
+        String modificador;
         boolean inicializada;
         int linea;
         String scope;
 
-        // Para funciones y métodos
         List<String> tiposParametros;
         List<String> nombresParametros;
+
+        // Para arreglos
+        boolean esArreglo;
+        List<Integer> dimensiones;  // [5] o [3][4]
+        Map<String, Object> valoresArreglo;  // Índice como "0" o "1,2" -> valor
 
         IdentificadorInfo(String nombre, String tipo, Object valor, String modificador, int linea, String scope) {
             this.nombre = nombre;
@@ -50,6 +54,9 @@ public class Parser {
             this.scope = scope;
             this.tiposParametros = new ArrayList<>();
             this.nombresParametros = new ArrayList<>();
+            this.esArreglo = false;
+            this.dimensiones = new ArrayList<>();
+            this.valoresArreglo = new HashMap<>();
         }
     }
 
@@ -66,7 +73,7 @@ public class Parser {
     private Map<String, IdentificadorInfo> tablaSimbolos = new HashMap<>();
     private List<String> erroresSemanticos = new ArrayList<>();
     private List<String> warnings = new ArrayList<>();
-    private Set<String> erroresReportados = new HashSet<>();  // Para evitar duplicados
+    private Set<String> erroresReportados = new HashSet<>();
 
     // =============================================================================
     // CONTROL DE CONTEXTO
@@ -77,8 +84,8 @@ public class Parser {
     private boolean esConstanteActual = false;
     private String funcionActual = "";
     private String claseActual = "";
-    private int nivelBloque = 0; // Rastrear profundidad de bloques globales
-    private int nivelBloqueFuncion = 0; // Rastrear profundidad dentro de función/método
+    private int nivelBloque = 0;
+    private int nivelBloqueFuncion = 0;
     private int nivelBucle = 0;
     private boolean dentroDeSwitch = false;
     private boolean esperandoTipoRetorno = false;
@@ -86,9 +93,9 @@ public class Parser {
     private boolean acabaDeVerAclama = false;
     private boolean vieneDeAclama = false;
     private boolean acabaDeVerInvoco = false;
-    private String objetoInvocando = ""; // Para rastrear el objeto en "invoco objeto.metodo()"
+    private String objetoInvocando = "";
     private boolean dentroDeConstructor = false;
-    private boolean dentroDeMetodo = false; // Para rastrear si estamos en el cuerpo de un método
+    private boolean dentroDeMetodo = false;
 
     private List<ParametroInfo> parametrosActuales = new ArrayList<>();
     private String tipoRetornoActual = "";
@@ -97,15 +104,182 @@ public class Parser {
     private String nombreVarAsignando = "";
     private IdentificadorInfo varAsignando = null;
 
-    // Acumulador semántico
-    private float acumulador = 0;
-    private boolean expresionTieneReales = false;
-    private String tipoExpresionActual = "";  // Tipo detectado de la expresión actual
-    private String operadorActual = "+";
+    // Evaluador de expresiones mejorado
     private boolean dentroDeExpresion = false;
+    private List<Object> expresionTokens = new ArrayList<>();
+    private String tipoExpresionActual = "";
+
+    // Control de arreglos - NUEVAS VARIABLES
+    private boolean declarandoArreglo = false;
+    private List<Integer> dimensionesActuales = new ArrayList<>();
+    private boolean asignandoElementoArreglo = false;
+    private String nombreArregloAsignando = "";
+    private List<Integer> indicesAcceso = new ArrayList<>();
+    private boolean dentroDeInicializacionArreglo = false;
+    private List<Object> valoresInicializacion = new ArrayList<>();
 
     public Parser() {
         inicializarMapeoTokens();
+    }
+
+    // =============================================================================
+    // EVALUADOR DE EXPRESIONES CON PRECEDENCIA
+    // =============================================================================
+
+    private static class ExpresionResult {
+        float valor;
+        boolean esReal;
+        String tipo;
+
+        ExpresionResult(float valor, boolean esReal, String tipo) {
+            this.valor = valor;
+            this.esReal = esReal;
+            this.tipo = tipo;
+        }
+    }
+
+    private ExpresionResult evaluarExpresion(List<Object> tokens) {
+        // Convertir tokens a notación postfija (Shunting Yard)
+        List<Object> postfix = convertirAPostfija(tokens);
+
+        // Evaluar expresión postfija
+        return evaluarPostfija(postfix);
+    }
+
+    private List<Object> convertirAPostfija(List<Object> infix) {
+        List<Object> output = new ArrayList<>();
+        Stack<String> operators = new Stack<>();
+
+        for (Object token : infix) {
+            if (token instanceof Number || token instanceof String) {
+                // Si es número o variable, agregar directamente a la salida
+                if (!(token instanceof String) || !esOperador((String) token)) {
+                    output.add(token);
+                } else {
+                    // Es un operador
+                    String op = (String) token;
+
+                    if (op.equals("(")) {
+                        operators.push(op);
+                    } else if (op.equals(")")) {
+                        // Desapilar hasta encontrar (
+                        while (!operators.isEmpty() && !operators.peek().equals("(")) {
+                            output.add(operators.pop());
+                        }
+                        if (!operators.isEmpty()) {
+                            operators.pop(); // Quitar el (
+                        }
+                    } else {
+                        // Operador aritmético
+                        while (!operators.isEmpty() &&
+                                !operators.peek().equals("(") &&
+                                precedencia(operators.peek()) >= precedencia(op)) {
+                            output.add(operators.pop());
+                        }
+                        operators.push(op);
+                    }
+                }
+            }
+        }
+
+        // Vaciar operadores restantes
+        while (!operators.isEmpty()) {
+            output.add(operators.pop());
+        }
+
+        return output;
+    }
+
+    private ExpresionResult evaluarPostfija(List<Object> postfix) {
+        Stack<ExpresionResult> stack = new Stack<>();
+        boolean tieneReales = false;
+        String tipoDetectado = "enterito";
+
+        for (Object token : postfix) {
+            if (token instanceof Integer) {
+                stack.push(new ExpresionResult(((Integer) token).floatValue(), false, "enterito"));
+            } else if (token instanceof Float || token instanceof Double) {
+                float valor = ((Number) token).floatValue();
+                stack.push(new ExpresionResult(valor, true, "realito"));
+                tieneReales = true;
+                tipoDetectado = "realito";
+            } else if (token instanceof String) {
+                String str = (String) token;
+
+                if (esOperador(str)) {
+                    // Es operador, aplicar operación
+                    if (stack.size() < 2) continue;
+
+                    ExpresionResult b = stack.pop();
+                    ExpresionResult a = stack.pop();
+
+                    if (b.esReal || a.esReal) {
+                        tieneReales = true;
+                        tipoDetectado = "realito";
+                    }
+
+                    float resultado = aplicarOperacion(a.valor, b.valor, str);
+                    stack.push(new ExpresionResult(resultado, tieneReales, tipoDetectado));
+                } else {
+                    // Es variable, buscar su valor
+                    String scope = obtenerScopeActual();
+                    IdentificadorInfo var = buscarIdentificador(scope + "." + str);
+                    if (var == null) var = buscarIdentificador("global." + str);
+
+                    if (var != null && var.valor instanceof Number) {
+                        float valor = ((Number) var.valor).floatValue();
+                        boolean esReal = var.tipo.equals("realito");
+
+                        if (esReal) {
+                            tieneReales = true;
+                            tipoDetectado = "realito";
+                        }
+
+                        stack.push(new ExpresionResult(valor, esReal, var.tipo));
+                    } else {
+                        // Variable no numérica o no inicializada
+                        stack.push(new ExpresionResult(0, false, "enterito"));
+                    }
+                }
+            }
+        }
+
+        if (stack.isEmpty()) {
+            return new ExpresionResult(0, false, "enterito");
+        }
+
+        ExpresionResult resultado = stack.pop();
+        resultado.esReal = tieneReales;
+        resultado.tipo = tipoDetectado;
+        return resultado;
+    }
+
+    private boolean esOperador(String str) {
+        return str.equals("+") || str.equals("-") || str.equals("*") ||
+                str.equals("/") || str.equals("(") || str.equals(")");
+    }
+
+    private int precedencia(String op) {
+        switch (op) {
+            case "+":
+            case "-":
+                return 1;
+            case "*":
+            case "/":
+                return 2;
+            default:
+                return 0;
+        }
+    }
+
+    private float aplicarOperacion(float a, float b, String operador) {
+        switch (operador) {
+            case "+": return a + b;
+            case "-": return a - b;
+            case "*": return a * b;
+            case "/": return b != 0 ? a / b : 0;
+            default: return 0;
+        }
     }
 
     // =============================================================================
@@ -178,7 +352,7 @@ public class Parser {
     }
 
     // =============================================================================
-    // CARGA DE TABLA TAS (sin cambios)
+    // CARGA DE TABLA TAS
     // =============================================================================
 
     public void cargarTAS(String archivo) throws IOException {
@@ -349,11 +523,10 @@ public class Parser {
         this.tokens = tokensEntrada;
         this.currentTokenIndex = 0;
 
-        // Limpiar estado
         tablaSimbolos.clear();
         erroresSemanticos.clear();
         warnings.clear();
-        erroresReportados.clear();  // Limpiar errores reportados
+        erroresReportados.clear();
         resetearContexto();
 
         pila.clear();
@@ -429,12 +602,18 @@ public class Parser {
         acabaDeVerInvoco = false;
         objetoInvocando = "";
         dentroDeConstructor = false;
-        acumulador = 0;
-        expresionTieneReales = false;
-        operadorActual = "+";
         dentroDeExpresion = false;
+        expresionTokens.clear();
+        tipoExpresionActual = "";
         varAsignando = null;
         nombreVarAsignando = "";
+        declarandoArreglo = false;
+        dimensionesActuales.clear();
+        asignandoElementoArreglo = false;
+        nombreArregloAsignando = "";
+        indicesAcceso.clear();
+        dentroDeInicializacionArreglo = false;
+        valoresInicializacion.clear();
     }
 
     // =============================================================================
@@ -442,12 +621,11 @@ public class Parser {
     // =============================================================================
 
     private void procesarDerivacion(String noTerminal, String produccion) {
-        // Detectar función (favor) o método (metodillo)
         if ((produccion.contains("favor") && !produccion.contains("porfavor")) || produccion.contains("metodillo")) {
             parametrosActuales.clear();
             tipoRetornoActual = "";
             funcionTieneRetorno = false;
-            esperandoTipoRetorno = true;  // Activar INMEDIATAMENTE
+            esperandoTipoRetorno = true;
         }
 
         if (produccion.contains("constantito")) {
@@ -480,112 +658,121 @@ public class Parser {
             }
         }
 
-        // 2. CLASESITA
-        if (terminal.equals("clasesita")) {
-            // Siguiente ID será nombre de clase
-        }
-
-        // 3. ACLAMA
+        // 2. ACLAMA
         if (terminal.equals("aclama")) {
             acabaDeVerAclama = true;
         }
 
-        // 3b. INVOCO
+        // 3. INVOCO
         if (terminal.equals("invoco")) {
             acabaDeVerInvoco = true;
         }
 
-        // 4. PUNTO después de aclama o invoco
+        // 4. PUNTO
         if (terminal.equals(".")) {
             if (acabaDeVerAclama) {
                 vieneDeAclama = true;
                 acabaDeVerAclama = false;
             }
-            // Para invoco, el punto confirma que es llamada a método de objeto
-            // acabaDeVerInvoco se maneja en procesarIdentificador
         }
 
-        // 5. LITERALES Y OPERADORES (Acumulador)
+        // 5. COLECTAR TOKENS DE EXPRESIÓN
         if (dentroDeExpresion) {
             if (terminal.equals("entero") && token.type == TokenType.ENTERO) {
-                tipoExpresionActual = "enterito";
-                int valor = (Integer) token.literal;
-                acumulador = aplicarOperacion(acumulador, valor, operadorActual);
-                operadorActual = "+";
+                expresionTokens.add(token.literal);
             } else if (terminal.equals("decimal") && token.type == TokenType.REAL) {
-                tipoExpresionActual = "realito";
-                expresionTieneReales = true;
-                float valor = ((Number) token.literal).floatValue();
-                acumulador = aplicarOperacion(acumulador, valor, operadorActual);
-                operadorActual = "+";
-            } else if (terminal.equals("cadena") && token.type == TokenType.STRING) {
-                tipoExpresionActual = "cadenita";
-                // No acumular, solo marcar el tipo
-            } else if (terminal.equals("char") && token.type == TokenType.CHAR) {
-                tipoExpresionActual = "charsito";
-                // No acumular, solo marcar el tipo
-            } else if ((terminal.equals("TRUE") || terminal.equals("FALSE")) && token.type == TokenType.BOOLEAN) {
-                tipoExpresionActual = "booleanito";
-                // No acumular, solo marcar el tipo
-            } else if (terminal.equals("+")) {
-                operadorActual = "+";
-            } else if (terminal.equals("-")) {
-                operadorActual = "-";
-            } else if (terminal.equals("*")) {
-                operadorActual = "*";
-            } else if (terminal.equals("/")) {
-                operadorActual = "/";
+                expresionTokens.add(((Number) token.literal).floatValue());
+            } else if (terminal.equals("id")) {
+                // Agregar nombre de variable
+                expresionTokens.add(token.lexeme);
+            } else if (terminal.equals("+") || terminal.equals("-") ||
+                    terminal.equals("*") || terminal.equals("/")) {
+                expresionTokens.add(terminal);
+            } else if (terminal.equals("(")) {
+                expresionTokens.add("(");
+            } else if (terminal.equals(")")) {
+                expresionTokens.add(")");
             }
+        }
+
+        // 5b. MANEJO DE ARREGLOS - Corchetes
+        if (terminal.equals("[")) {
+            // Revisar contexto
+            if (!idPendiente.isEmpty() && !tipoActual.isEmpty() && !dentroDeFuncion) {
+                // Declaración de arreglo: podriasCrear enterito nums[5] :)
+                declarandoArreglo = true;
+            } else if (asignandoElementoArreglo) {
+                // Ya estamos en asignación, recolectar índice
+            } else {
+                // Puede ser acceso a arreglo en expresión o asignación
+                // Verificar si hay un ID justo antes
+                if (currentTokenIndex > 0) {
+                    Token prevToken = tokens.get(currentTokenIndex - 1);
+                    if (prevToken.type == TokenType.IDENTIFICADOR ||
+                            prevToken.type == TokenType.IDENTIFICADOR_MAYUSCULA) {
+                        nombreArregloAsignando = prevToken.lexeme;
+                    }
+                }
+            }
+        }
+
+        if (terminal.equals("entero") && declarandoArreglo) {
+            // Es el tamaño del arreglo
+            dimensionesActuales.add((Integer) token.literal);
+        }
+
+        if (terminal.equals("]") && declarandoArreglo) {
+            // Puede haber más dimensiones o terminar
+        }
+
+        // 5c. INICIALIZACIÓN DE ARREGLO CON LLAVES
+        if (terminal.equals("{") && !idPendiente.isEmpty() && declarandoArreglo) {
+            dentroDeInicializacionArreglo = true;
+            valoresInicializacion.clear();
+        }
+
+        if (dentroDeInicializacionArreglo) {
+            if (terminal.equals("entero") && token.type == TokenType.ENTERO) {
+                valoresInicializacion.add(token.literal);
+            } else if (terminal.equals("decimal") && token.type == TokenType.REAL) {
+                valoresInicializacion.add(token.literal);
+            } else if (terminal.equals("cadena") && token.type == TokenType.STRING) {
+                valoresInicializacion.add(token.literal);
+            } else if (terminal.equals("char") && token.type == TokenType.CHAR) {
+                valoresInicializacion.add(token.literal);
+            } else if ((terminal.equals("TRUE") || terminal.equals("FALSE")) && token.type == TokenType.BOOLEAN) {
+                valoresInicializacion.add(token.literal);
+            }
+        }
+
+        if (terminal.equals("}") && dentroDeInicializacionArreglo) {
+            dentroDeInicializacionArreglo = false;
         }
 
         // 6. IDENTIFICADORES
         if (terminal.equals("id")) {
             procesarIdentificador(token);
-
-            // Si estamos en expresión y es uso de variable, acumular
-            if (dentroDeExpresion && !vieneDeAclama && tipoActual.isEmpty()) {
-                String scope = obtenerScopeActual();
-                IdentificadorInfo var = buscarIdentificador(scope + "." + token.lexeme);
-                if (var == null) var = buscarIdentificador("global." + token.lexeme);
-                if (var != null && var.valor != null) {
-                    // Detectar tipo de la variable
-                    if (tipoExpresionActual.isEmpty()) {
-                        tipoExpresionActual = var.tipo;
-                    }
-
-                    // Solo intentar acumular si es numérico
-                    if (var.valor instanceof Number) {
-                        if (var.tipo.equals("realito")) expresionTieneReales = true;
-                        float valor = ((Number) var.valor).floatValue();
-                        acumulador = aplicarOperacion(acumulador, valor, operadorActual);
-                        operadorActual = "+";
-                    }
-                }
-            }
         }
 
         // 7. ENTRADA A BLOQUE
         if (terminal.equals("{")) {
-            nivelBloque++; // Incrementar nivel de bloque global
+            nivelBloque++;
 
-            // Si ya hay una función activa O estamos en constructor, marcar nivel
             if (!funcionActual.isEmpty() || dentroDeConstructor) {
                 dentroDeFuncion = true;
-                nivelBloqueFuncion++; // Incrementar nivel dentro de función/constructor
+                nivelBloqueFuncion++;
 
-                // Si estamos en una clase y hay función activa, es un método
                 if (!claseActual.isEmpty() && !funcionActual.isEmpty()) {
                     dentroDeMetodo = true;
                 }
             }
 
-            // Detectar entrada a principalsito
             if (funcionActual.isEmpty() && claseActual.isEmpty()) {
                 for (int i = currentTokenIndex - 1; i >= Math.max(0, currentTokenIndex - 5); i--) {
                     if (tokens.get(i).type == TokenType.PRINCIPALSITO) {
                         funcionActual = "principalsito";
                         dentroDeFuncion = true;
-                        nivelBloqueFuncion = 1; // Iniciar nivel
+                        nivelBloqueFuncion = 1;
                         tipoRetornoActual = "vacio";
                         break;
                     }
@@ -595,15 +782,20 @@ public class Parser {
 
         // 8. FIN DE DECLARACIÓN (:))
         if (terminal.equals(":)")) {
-            // Si estamos dentro de un método, NO registrar nada
             if (!dentroDeMetodo && !idPendiente.isEmpty() && !tipoActual.isEmpty()) {
                 procesarFinDeclaracion(token);
             }
 
-            // Si estábamos en expresión, ejecutar asignación
             if (dentroDeExpresion && varAsignando != null) {
-                ejecutarAsignacionConAcumulador(token.line);
+                ejecutarAsignacionConExpresion(token.line);
                 dentroDeExpresion = false;
+            }
+
+            // Limpiar contexto de arreglo
+            if (declarandoArreglo) {
+                declarandoArreglo = false;
+                dimensionesActuales.clear();
+                valoresInicializacion.clear();
             }
         }
 
@@ -649,26 +841,22 @@ public class Parser {
     private void procesarIdentificador(Token token) {
         String nombre = token.lexeme;
 
-        // CONTEXTO 1: Nombre de clase (después de clasesita)
         if (tipoActual.equals("clasesita")) {
             registrarClase(nombre, token.line);
             tipoActual = "";
             return;
         }
 
-        // CONTEXTO 2: Nombre de constructor
         if (!claseActual.isEmpty() && nombre.equals(claseActual) && !dentroDeConstructor) {
             dentroDeConstructor = true;
             return;
         }
 
-        // CONTEXTO 3: Tipo de clase para instanciar
         if (esClase(nombre) && tipoActual.isEmpty() && idPendiente.isEmpty()) {
             tipoActual = nombre;
             return;
         }
 
-        // CONTEXTO 4: Llamada a función con aclama
         if (vieneDeAclama) {
             if (!existeFuncion(nombre)) {
                 agregarError("Función '" + nombre + "' no declarada (línea " + token.line + ")");
@@ -677,26 +865,19 @@ public class Parser {
             return;
         }
 
-        // CONTEXTO 4b: Llamada a método con invoco objeto.metodo()
         if (acabaDeVerInvoco && objetoInvocando.isEmpty()) {
-            // Este es el nombre del objeto (ej: persona1)
             verificarIdentificadorDeclarado(nombre, token.line);
             objetoInvocando = nombre;
             return;
         }
 
-        // CONTEXTO 4c: Nombre del método después de invoco objeto.
         if (!objetoInvocando.isEmpty()) {
-            // Verificar que el objeto es de tipo clase
             String scope = obtenerScopeActual();
             IdentificadorInfo objInfo = buscarIdentificador(scope + "." + objetoInvocando);
             if (objInfo == null) objInfo = buscarIdentificador("global." + objetoInvocando);
 
             if (objInfo != null && objInfo.modificador.equals("objeto")) {
-                // Obtener la clase del objeto
                 String tipoClase = objInfo.tipo;
-
-                // Verificar que el método existe en esa clase
                 String metodoKey = "clase_" + tipoClase + "." + nombre;
                 IdentificadorInfo metodoInfo = buscarIdentificador(metodoKey);
 
@@ -705,39 +886,33 @@ public class Parser {
                 }
             }
 
-            // Limpiar contexto de invoco
             acabaDeVerInvoco = false;
             objetoInvocando = "";
             return;
         }
 
-        // CONTEXTO 5: Nombre de función
         if (!tipoRetornoActual.isEmpty() && funcionActual.isEmpty() && claseActual.isEmpty()) {
             registrarFuncion(nombre, token.line);
             return;
         }
 
-        // CONTEXTO 6: Nombre de método
         if (!tipoRetornoActual.isEmpty() && !claseActual.isEmpty() && funcionActual.isEmpty()) {
             funcionActual = nombre;
-            tipoActual = ""; // Limpiar para evitar que se registre como parámetro
-            idPendiente = ""; // Limpiar para evitar que se registre como variable
+            tipoActual = "";
+            idPendiente = "";
             return;
         }
 
-        // CONTEXTO 7: Parámetro
         if ((!funcionActual.isEmpty() || dentroDeConstructor) && !tipoActual.isEmpty() && !dentroDeFuncion) {
             registrarParametro(nombre, token.line);
             return;
         }
 
-        // CONTEXTO 8: Declarando variable
         if (!tipoActual.isEmpty() && idPendiente.isEmpty()) {
             idPendiente = nombre;
             return;
         }
 
-        // CONTEXTO 9: Usando variable
         if (tipoActual.isEmpty() && idPendiente.isEmpty()) {
             verificarIdentificadorDeclarado(nombre, token.line);
             return;
@@ -767,13 +942,10 @@ public class Parser {
             return;
         }
 
-        // Registrar función inmediatamente
         IdentificadorInfo info = new IdentificadorInfo(nombre, tipoRetornoActual, null, "favor", linea, "global");
         tablaSimbolos.put(key, info);
 
         funcionActual = nombre;
-
-        // CRÍTICO: Limpiar residuos
         idPendiente = "";
         tipoActual = "";
 
@@ -793,7 +965,6 @@ public class Parser {
 
         IdentificadorInfo info = new IdentificadorInfo(funcionActual, tipoRetornoActual, null, "metodillo", token.line, scope);
 
-        // Agregar parámetros
         for (ParametroInfo param : parametrosActuales) {
             info.tiposParametros.add(param.tipo);
             info.nombresParametros.add(param.nombre);
@@ -842,14 +1013,58 @@ public class Parser {
 
             IdentificadorInfo info = new IdentificadorInfo(idPendiente, tipoActual, obtenerValorDefault(tipoActual),
                     modificador, token.line, scope);
-            tablaSimbolos.put(key, info);
 
-            imprimirAccionSemantica("Declarando: " + idPendiente + " (Tipo: " + tipoActual.toUpperCase() +
-                    ", Modificador: " + modificador + ", Scope: " + scope + ")");
+            // Si es arreglo, configurar
+            if (!dimensionesActuales.isEmpty()) {
+                info.esArreglo = true;
+                info.dimensiones.addAll(dimensionesActuales);
+
+                // Si hay inicialización, validar tamaño
+                if (!valoresInicializacion.isEmpty()) {
+                    int tamanoEsperado = 1;
+                    for (int dim : dimensionesActuales) {
+                        tamanoEsperado *= dim;
+                    }
+
+                    if (valoresInicializacion.size() != tamanoEsperado && dimensionesActuales.size() == 1) {
+                        agregarWarning("Tamaño de inicialización (" + valoresInicializacion.size() +
+                                ") no coincide con dimensión declarada (" + tamanoEsperado +
+                                ") para arreglo '" + idPendiente + "'");
+                    }
+
+                    // Guardar valores
+                    for (int i = 0; i < valoresInicializacion.size(); i++) {
+                        info.valoresArreglo.put(String.valueOf(i), valoresInicializacion.get(i));
+                    }
+                    info.inicializada = true;
+                }
+
+                // Construir representación de dimensiones
+                StringBuilder dimStr = new StringBuilder();
+                for (int dim : dimensionesActuales) {
+                    dimStr.append("[").append(dim).append("]");
+                }
+
+                imprimirAccionSemantica("Declarando arreglo: " + idPendiente + dimStr +
+                        " (Tipo: " + tipoActual.toUpperCase() +
+                        ", Modificador: " + modificador +
+                        ", Scope: " + scope +
+                        (valoresInicializacion.isEmpty() ? "" : ", Inicializado con " + valoresInicializacion.size() + " valores") +
+                        ")");
+            } else {
+                tablaSimbolos.put(key, info);
+
+                imprimirAccionSemantica("Declarando: " + idPendiente + " (Tipo: " + tipoActual.toUpperCase() +
+                        ", Modificador: " + modificador + ", Scope: " + scope + ")");
+            }
+
+            tablaSimbolos.put(key, info);
 
             idPendiente = "";
             tipoActual = "";
             esConstanteActual = false;
+            dimensionesActuales.clear();
+            valoresInicializacion.clear();
         }
     }
 
@@ -876,31 +1091,47 @@ public class Parser {
                 return;
             }
 
+            // Verificar si es asignación a elemento de arreglo
+            // Buscar si hay un [ después del identificador
+            boolean esAsignacionArreglo = false;
+            if (idx + 1 < tokens.size() && tokens.get(idx + 1).type == TokenType.CORCHETE_IZQ) {
+                esAsignacionArreglo = true;
+
+                if (!var.esArreglo) {
+                    agregarError("'" + varNombre + "' no es un arreglo (línea " + token.line + ")");
+                    return;
+                }
+
+                // Recolectar índices
+                asignandoElementoArreglo = true;
+                nombreArregloAsignando = varNombre;
+                indicesAcceso.clear();
+
+                // No iniciar expresión aún, esperar hasta después de los corchetes
+                return;
+            }
+
             varAsignando = var;
             nombreVarAsignando = varNombre;
-            acumulador = 0;
-            expresionTieneReales = false;
-            tipoExpresionActual = "";  // Limpiar tipo de expresión
-            operadorActual = "+";
+            expresionTokens.clear();
+            tipoExpresionActual = "";
             dentroDeExpresion = true;
         }
     }
 
-    private void ejecutarAsignacionConAcumulador(int linea) {
-        if (varAsignando == null) return;
+    private void ejecutarAsignacionConExpresion(int linea) {
+        if (varAsignando == null || expresionTokens.isEmpty()) return;
+
+        // Evaluar expresión con precedencia correcta
+        ExpresionResult resultado = evaluarExpresion(expresionTokens);
 
         // VALIDACIÓN DE COMPATIBILIDAD DE TIPOS
         String tipoVariable = varAsignando.tipo;
-        String tipoExpresion = tipoExpresionActual.isEmpty() ?
-                (expresionTieneReales ? "realito" : "enterito") :
-                tipoExpresionActual;
+        String tipoExpresion = resultado.tipo;
 
         boolean hayError = false;
 
-        // ===== VALIDACIONES POR TIPO DE VARIABLE =====
-
         if (tipoVariable.equals("enterito")) {
-            // enterito solo acepta enterito
             if (tipoExpresion.equals("realito")) {
                 agregarError("No se puede asignar REALITO a variable ENTERITO '" + nombreVarAsignando + "' (línea " + linea + ")");
                 hayError = true;
@@ -915,7 +1146,6 @@ public class Parser {
                 hayError = true;
             }
         } else if (tipoVariable.equals("realito")) {
-            // realito acepta enterito (con warning) y realito
             if (tipoExpresion.equals("cadenita")) {
                 agregarError("No se puede asignar CADENITA a variable REALITO '" + nombreVarAsignando + "' (línea " + linea + ")");
                 hayError = true;
@@ -926,59 +1156,22 @@ public class Parser {
                 agregarError("No se puede asignar BOOLEANITO a variable REALITO '" + nombreVarAsignando + "' (línea " + linea + ")");
                 hayError = true;
             } else if (tipoExpresion.equals("enterito")) {
-                // Conversión permitida con warning
                 agregarWarning("Conversión implícita: ENTERITO → REALITO en '" + nombreVarAsignando + "'");
-            }
-        } else if (tipoVariable.equals("cadenita")) {
-            // cadenita acepta cadenita y charsito
-            if (tipoExpresion.equals("enterito")) {
-                agregarError("No se puede asignar ENTERITO a variable CADENITA '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
-            } else if (tipoExpresion.equals("realito")) {
-                agregarError("No se puede asignar REALITO a variable CADENITA '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
-            } else if (tipoExpresion.equals("booleanito")) {
-                agregarError("No se puede asignar BOOLEANITO a variable CADENITA '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
-            }
-            // charsito → cadenita es OK (sin warning)
-        } else if (tipoVariable.equals("charsito")) {
-            // charsito acepta charsito y cadenita (toma primer carácter)
-            if (tipoExpresion.equals("enterito")) {
-                agregarError("No se puede asignar ENTERITO a variable CHARSITO '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
-            } else if (tipoExpresion.equals("realito")) {
-                agregarError("No se puede asignar REALITO a variable CHARSITO '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
-            } else if (tipoExpresion.equals("booleanito")) {
-                agregarError("No se puede asignar BOOLEANITO a variable CHARSITO '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
-            }
-            // cadenita → charsito es OK (toma primer carácter, sin warning)
-        } else if (tipoVariable.equals("booleanito")) {
-            // booleanito solo acepta booleanito
-            if (!tipoExpresion.equals("booleanito")) {
-                agregarError("No se puede asignar " + tipoExpresion.toUpperCase() + " a variable BOOLEANITO '" + nombreVarAsignando + "' (línea " + linea + ")");
-                hayError = true;
             }
         }
 
-        // Si hay error, limpiar y salir SIN asignar
         if (hayError) {
             limpiarAsignacion();
             return;
         }
 
-        // Asignar valor (solo si es numérico)
-        if ((tipoVariable.equals("enterito") || tipoVariable.equals("realito")) &&
-                (tipoExpresion.equals("enterito") || tipoExpresion.equals("realito"))) {
-            if (tipoVariable.equals("enterito")) {
-                varAsignando.valor = (int) acumulador;
-                imprimirAccionSemantica("Asignando: " + nombreVarAsignando + " = " + (int) acumulador);
-            } else {
-                varAsignando.valor = acumulador;
-                imprimirAccionSemantica("Asignando: " + nombreVarAsignando + " = " + acumulador);
-            }
+        // Asignar valor
+        if (tipoVariable.equals("enterito")) {
+            varAsignando.valor = (int) resultado.valor;
+            imprimirAccionSemantica("Asignando: " + nombreVarAsignando + " = " + (int) resultado.valor);
+        } else if (tipoVariable.equals("realito")) {
+            varAsignando.valor = resultado.valor;
+            imprimirAccionSemantica("Asignando: " + nombreVarAsignando + " = " + resultado.valor);
         }
 
         varAsignando.inicializada = true;
@@ -989,55 +1182,36 @@ public class Parser {
         varAsignando = null;
         nombreVarAsignando = "";
         dentroDeExpresion = false;
-        acumulador = 0;
-        expresionTieneReales = false;
+        expresionTokens.clear();
         tipoExpresionActual = "";
     }
 
-    private float aplicarOperacion(float acumulado, float valor, String operador) {
-        switch (operador) {
-            case "+": return acumulado + valor;
-            case "-": return acumulado - valor;
-            case "*": return acumulado * valor;
-            case "/": return valor != 0 ? acumulado / valor : 0;
-            default: return acumulado + valor;
-        }
-    }
-
     private void procesarCierreBloque() {
-        nivelBloque--; // Decrementar nivel de bloque global
+        nivelBloque--;
 
-        // Si estamos en una función o constructor, decrementar su nivel
         if ((!funcionActual.isEmpty() || dentroDeConstructor) && nivelBloqueFuncion > 0) {
             nivelBloqueFuncion--;
         }
 
-        // Solo validar retorno y limpiar contexto cuando salimos del bloque principal
         if (nivelBloqueFuncion == 0) {
-            // Constructor terminado
             if (dentroDeConstructor) {
                 dentroDeConstructor = false;
-                funcionActual = ""; // Limpiar residuos
+                funcionActual = "";
                 tipoRetornoActual = "";
                 parametrosActuales.clear();
                 dentroDeFuncion = false;
-            }
-            // Función/Método terminado
-            else if (!funcionActual.isEmpty()) {
+            } else if (!funcionActual.isEmpty()) {
                 if (!tipoRetornoActual.equals("vacio") && !funcionTieneRetorno) {
                     agregarError("Función '" + funcionActual + "' debe tener 'retorna'");
                 }
 
-                // Si estamos en una clase, registrar como método
                 if (!claseActual.isEmpty()) {
-                    registrarMetodo(tokens.get(currentTokenIndex - 1)); // Token del '}'
+                    registrarMetodo(tokens.get(currentTokenIndex - 1));
                 } else {
-                    // Actualizar parámetros de la función global
                     if (!funcionActual.equals("principalsito")) {
                         String key = "global." + funcionActual;
                         IdentificadorInfo funcInfo = tablaSimbolos.get(key);
                         if (funcInfo != null) {
-                            // Actualizar parámetros
                             funcInfo.tiposParametros.clear();
                             funcInfo.nombresParametros.clear();
                             for (ParametroInfo param : parametrosActuales) {
@@ -1048,18 +1222,14 @@ public class Parser {
                     }
                 }
 
-                // Limpiar todo el contexto de la función/método
                 funcionActual = "";
                 tipoRetornoActual = "";
                 funcionTieneRetorno = false;
                 parametrosActuales.clear();
                 dentroDeFuncion = false;
-                dentroDeMetodo = false; // Desactivar flag de método
-
-                // Limpiar residuos que pudieran causar registro incorrecto
+                dentroDeMetodo = false;
                 idPendiente = "";
                 tipoActual = "";
-                dentroDeFuncion = false;
             }
         }
 
@@ -1147,7 +1317,6 @@ public class Parser {
         StringBuilder sb = new StringBuilder();
         for (int i = currentTokenIndex; i < tokens.size(); i++) {
             sb.append(tokens.get(i).lexeme).append(" ");
-            // Si ya superamos 70 caracteres, truncar
             if (sb.length() > 70) {
                 return sb.substring(0, 67) + "...";
             }
@@ -1178,13 +1347,11 @@ public class Parser {
     }
 
     private String mostrarPila() {
-        // Convertir pila a lista para mostrar correctamente ($ a la izquierda, tope a la derecha)
         List<String> elementos = new ArrayList<>(pila);
         Collections.reverse(elementos);
 
         String pilaStr = String.join(" ", elementos);
 
-        // Si es muy larga (más de 35 caracteres), truncar con ...
         if (pilaStr.length() > 35) {
             pilaStr = pilaStr.substring(0, 32) + "...";
         }
@@ -1193,7 +1360,6 @@ public class Parser {
     }
 
     private void agregarError(String mensaje) {
-        // Crear clave única para evitar duplicados
         String clave = mensaje.toLowerCase().replaceAll("\\s+", " ");
 
         if (!erroresReportados.contains(clave)) {
@@ -1221,7 +1387,6 @@ public class Parser {
         System.out.println(" ".repeat(45) + "TABLA ÚNICA DE IDENTIFICADORES");
         System.out.println("=".repeat(140));
 
-        // TABLA DE IDENTIFICADORES
         System.out.println("\n📋 IDENTIFICADORES DECLARADOS:");
         System.out.println("-".repeat(140));
         System.out.printf("%-20s %-15s %-20s %-15s %-30s%n",
@@ -1231,7 +1396,6 @@ public class Parser {
         if (tablaSimbolos.isEmpty()) {
             System.out.println(" (No se declararon identificadores)");
         } else {
-            // Ordenar por scope y nombre
             List<Map.Entry<String, IdentificadorInfo>> entradas = new ArrayList<>(tablaSimbolos.entrySet());
             entradas.sort((a, b) -> {
                 int scopeCompare = a.getValue().scope.compareTo(b.getValue().scope);
@@ -1242,16 +1406,30 @@ public class Parser {
             for (Map.Entry<String, IdentificadorInfo> entry : entradas) {
                 IdentificadorInfo info = entry.getValue();
 
+                String valorStr;
+                if (info.esArreglo) {
+                    if (info.valoresArreglo.isEmpty()) {
+                        StringBuilder dimStr = new StringBuilder();
+                        for (int dim : info.dimensiones) {
+                            dimStr.append("[").append(dim).append("]");
+                        }
+                        valorStr = "arreglo" + dimStr;
+                    } else {
+                        valorStr = "{" + info.valoresArreglo.size() + " elementos}";
+                    }
+                } else {
+                    valorStr = info.valor != null ? info.valor.toString() : "null";
+                }
+
                 System.out.printf("%-20s %-15s %-20s %-15s %-30s%n",
                         info.nombre,
-                        info.tipo,
-                        info.valor != null ? info.valor.toString() : "null",
+                        info.tipo + (info.esArreglo ? "[]" : ""),
+                        valorStr,
                         info.modificador,
                         info.scope);
             }
         }
 
-        // ERRORES
         if (!erroresSemanticos.isEmpty()) {
             System.out.println("\n❌ ERRORES SEMÁNTICOS ENCONTRADOS:");
             System.out.println("-".repeat(140));
@@ -1260,7 +1438,6 @@ public class Parser {
             }
         }
 
-        // WARNINGS
         if (!warnings.isEmpty()) {
             System.out.println("\n⚠️  ADVERTENCIAS:");
             System.out.println("-".repeat(140));
@@ -1269,7 +1446,6 @@ public class Parser {
             }
         }
 
-        // RESUMEN
         System.out.println("\n📊 RESUMEN:");
         System.out.println("-".repeat(140));
 

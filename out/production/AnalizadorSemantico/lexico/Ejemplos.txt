@@ -1,6 +1,6 @@
 principalsito () {
     podriasCrear enterito edad :)
-    porfavor edad = 25 * 10 :)
+    porfavor edad = (5*2)+(6*5)*(1+1) :)
     podriasImprimir("La edad es: " + edad) :)
 }
 #
