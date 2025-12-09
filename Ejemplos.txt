@@ -1,0 +1,212 @@
+principalsito () {
+    podriasCrear enterito edad :)
+    porfavor edad = 25 * 10 :)
+    podriasImprimir("La edad es: " + edad) :)
+}
+#
+
+==========================
+
+favor enterito sumar(enterito a, enterito b) {
+    podriasCrear enterito resultado :)
+    porfavor resultado = a + b :)
+    retorna resultado :)
+} :)
+
+principalsito () {
+    podriasCrear enterito num1 :)
+    podriasCrear enterito num2 :)
+    porfavor num1 = 10 :)
+    porfavor num2 = 20 :)
+    aclama.sumar(num1, num2) :)
+}
+#
+
+================================
+
+principalsito () {
+    podriasCrear enterito edad :)
+    podriasLeer(edad) :)
+
+    siCumple (edad >= 18) {
+        podriasImprimir("Eres mayor de edad") :)
+    } peroSiCumple (edad >= 13) {
+        podriasImprimir("Esres adolescente") :)
+    } casoContrario {
+        podriasImprimir("Eres menor") :)
+    }
+}
+#
+==============================
+
+principalsito () {
+    podriasCrear enterito contador :)
+    porfavor contador = 0 :)
+
+    SiPersiste (contador < 10) {
+        podriasImprimir("Contador: " + contador) :)
+        porfavor contador = contador + 1 :)
+
+        siControla (contador == 5) {
+            saltear
+        }
+    }
+}
+#
+
+==============================
+
+principalsito () {
+    podriasCrear enterito opcion :)
+    porfavor opcion = 2 :)
+
+    enCasoSea (opcion) {
+        1 :
+            podriasImprimir("Opcion uno") :)
+            parar :)
+        2 :
+            podriasImprimir("Opcion dos") :)
+            parar :)
+        3 :
+            podriasImprimir("Opcion tres") :)
+            parar :)
+        oSino :
+            podriasImprimir("Opcion no valida") :)
+    }
+}
+#
+
+=====================
+
+clasesita Persona {
+    podriasCrear cadenita nombre :)
+    podriasCrear enterito edad :)
+
+    Persona(cadenita n, enterito e) {
+        porfavor yo.nombre = n :)
+        porfavor yo.edad = e :)
+    }
+
+    porfavor metodillo vacio saludar() {
+        podriasImprimir("Hola, soy " + nombre) :)
+    }
+}
+
+principalsito () {
+    Persona persona1 = clona Persona("Juan", 25) :)
+    invoco persona1.saludar() :)
+}
+#
+
+================================
+
+principalsito () {
+    podriasCrear constantito enterito MAX[3] = {100, 200, 300} :)
+    podriasCrear enterito numeros[5] :)
+
+    porfavor numeros = 0 :)
+    podriasImprimir("Primer elemento: " + numeros) :)
+}
+#
+
+=============================
+
+principalsito () {
+    podriasCrear enterito a :)
+    podriasCrear enterito b :)
+    podriasCrear booleanito resultado :)
+
+    porfavor a = 10 :)
+    porfavor b = 20 :)
+
+    porfavor resultado = (a < b) && (a > 5) :)
+
+    siCumple (resultado == true) {
+        podriasImprimir("La condicion es verdadera") :)
+    }
+
+    podriasCrear realito division :)
+    porfavor division = a / b :)
+}
+#
+
+===========================
+
+favor vacio mostrarDatos(cadenita nombre, enterito edad, realito altura, booleanito bol) {
+    porfavor nombre = true :)
+    porfavor nombre = "true" :)
+    porfavor nombre = 12 :)
+    porfavor nombre = 12.19 :)
+    porfavor nombre = 'a' :)
+
+    porfavor altura = true :)
+    porfavor altura = "true" :)
+    porfavor altura = 12 :)
+    porfavor altura = 12.20 :)
+    porfavor altura = 'a' :)
+
+    porfavor bol = true :)
+    porfavor bol = "true" :)
+    porfavor bol = 12 :)
+    porfavor bol = 12.20 :)
+    porfavor bol = 'a' :)
+
+    podriasImprimir("Nombre: " + nombre) :)
+    podriasImprimir("Edad: " + edad) :)
+    podriasImprimir("Altura: " + altura) :)
+
+} :)
+
+principalsito () {
+    aclama.mostrarDatos("Ana", 30, 1.65) :)
+}
+#
+
+==============================
+
+favor enterito factorial(enterito n) {
+    podriasCrear enterito resultado :)
+    porfavor resultado = 1 :)
+    podriasCrear enterito i :)
+    porfavor i = 1 :)
+
+    SiPersiste (i <= n) {
+        porfavor resultado = resultado * i :)
+        porfavor i = i + 1 :)
+    }
+
+    retorna resultado :)
+} :)
+
+principalsito () {
+    podriasCrear enterito numero :)
+    podriasImprimir("Ingrese un numero: ") :)
+    podriasLeer(numero) :)
+
+    podriasCrear enterito fact :)
+    aclama.factorial(numero) :)
+
+    podriasImprimir("El factorial es: " + fact) :)
+}
+#
+
+================================
+clasesita Persona {
+    podriasCrear cadenita nombre :)
+    podriasCrear enterito edad :)
+
+    Persona(cadenita n, cadenita e) {
+        porfavor yo.nombre = n :)
+        porfavor yo.edad = e :)
+    }
+
+    porfavor metodillo vacio saludar() {
+        podriasImprimir("Hola, soy " + nombre) :)
+    }
+}
+
+principalsito () {
+    Persona persona1 = clona Persona("Juan", 25) :)
+    invoco persona1.saludar() :)
+}
+#
